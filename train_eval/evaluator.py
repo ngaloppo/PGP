@@ -43,7 +43,7 @@ class Evaluator:
         self.model.eval()
 
         # Load checkpoint
-        checkpoint = torch.load(checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
         self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
         # Initialize metrics

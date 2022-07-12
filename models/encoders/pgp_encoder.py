@@ -206,8 +206,9 @@ class PGPEncoder(PredictionEncoder):
         batch_size = s_next.shape[0]
         max_nodes = s_next.shape[1]
         max_edges = s_next.shape[2]
-        adj_mat = torch.diag(torch.ones(max_nodes, device=device)).unsqueeze(0).repeat(batch_size, 1, 1).bool()
-
+        
+        adj_mat = torch.eye(max_nodes).unsqueeze(0).repeat(batch_size, 1, 1).bool()
+        
         dummy_vals = torch.arange(max_nodes, device=device).unsqueeze(0).unsqueeze(2).repeat(batch_size, 1, max_edges)
         dummy_vals = dummy_vals.float()
         s_next[edge_type == 0] = dummy_vals[edge_type == 0]
