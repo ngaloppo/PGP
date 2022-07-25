@@ -2,11 +2,13 @@ import argparse
 import yaml
 import os
 import torch
+import ipdb
 import torch.utils.data as torch_data
+import pickle
 from train_eval.initialization import initialize_prediction_model, initialize_metric,\
     initialize_dataset, get_specific_args
 from train_eval.utils import convert_double_to_float
-from torch_ort import ORTInferenceModule
+from torch_ort import ORTInferenceModule, DebugOptions
 
 if __name__ == '__main__':
 
@@ -17,13 +19,18 @@ if __name__ == '__main__':
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("-c", "--config", help="Config file with dataset parameters", required=True)
-    parser.add_argument("-r", "--data_root", help="Root directory with data", required=True)
-    parser.add_argument("-d", "--data_dir", help="Directory to extract data", required=True)
+    parser.add_argument("-r", "--data_root", help="Root directory with data", required=False)
+    parser.add_argument("-d", "--data_dir", help="Directory to extract data", required=False)
     parser.add_argument("-o", "--output_dir", help="Directory to save results", required=True)
     parser.add_argument("-w", "--checkpoint", help="Path to pre-trained or intermediate checkpoint", required=True)
+    parser.add_argument("-s", "--save_data", help="Save input data to disk, load from preprocessed data files", action='store_true')
     args = parser.parse_args()
 
     data_root, data_dir, checkpoint_path = args.data_root, args.data_dir, args.checkpoint
+
+    if (args.save_data and (not data_root or not data_dir)):
+            print("When --save_data is provided, --data_root and --data_dir need to be provided")
+            parser.usage();
 
     # Make directory
     os.makedirs('./onnx_model', exist_ok=True)
@@ -42,13 +49,14 @@ if __name__ == '__main__':
     :param checkpoint_path: Path to checkpoint with trained weights
     """
 
-        # Initialize dataset
-    ds_type = cfg['dataset'] + '_' + cfg['agent_setting'] + '_' + cfg['input_representation']
-    spec_args = get_specific_args(cfg['dataset'], data_root, cfg['version'] if 'version' in cfg.keys() else None)
-    test_set = initialize_dataset(ds_type, ['load_data', data_dir, cfg['test_set_args']] + spec_args)
+    # Initialize dataset
+    if (args.save_data): 
+        ds_type = cfg['dataset'] + '_' + cfg['agent_setting'] + '_' + cfg['input_representation']
+        spec_args = get_specific_args(cfg['dataset'], data_root, cfg['version'] if 'version' in cfg.keys() else None)
+        test_set = initialize_dataset(ds_type, ['load_data', data_dir, cfg['test_set_args']] + spec_args)
 
-    # Initialize dataloader
-    dl = torch_data.DataLoader(test_set, cfg['batch_size'], shuffle=False, num_workers=cfg['num_workers'])
+        # Initialize dataloader
+        dl = torch_data.DataLoader(test_set, cfg['batch_size'], shuffle=False, num_workers=cfg['num_workers'])
 
     # Initialize model
     model = initialize_prediction_model(cfg['encoder_type'], cfg['aggregator_type'], cfg['decoder_type'],
@@ -60,23 +68,33 @@ if __name__ == '__main__':
     checkpoint = torch.load(checkpoint_path, map_location= torch.device("cuda:0" if torch.cuda.is_available() else "cpu"))
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
-    model = ORTInferenceModule(model)
+    debug_options = DebugOptions(save_onnx=True, onnx_prefix='pgp')
+    model = ORTInferenceModule(model, debug_options=debug_options)
 
     # Load data for onnx export
-    data = next(iter(dl))
+    if (args.save_data):
+        data = next(iter(dl))
+        data = convert_double_to_float(data)
 
-    data = convert_double_to_float(data)
+        with open('input.pickle', 'wb') as outfile:
+            print("Saving input data to input.pickle")
+            pickle.dump(data['inputs'], outfile, protocol=pickle.HIGHEST_PROTOCOL)
+    else:
+        with open('input.pickle', 'rb') as infile:
+            print("Loading input data to input.pickle")
+            data = pickle.load(infile)
 
-    print("Evaluating...")
-    result = model(data['inputs'])
-    print("Done!")
-    
-    #Export model to onnx
-    # torch.onnx.export(model,
-                    # data['inputs'],
-                    # onnx_file_path,
-                    # input_names=['input'],
-                    # output_names=['output'],
-                    # export_params=True,
-                    # opset_version=13,
-                    # do_constant_folding=True)
+        print("Evaluating...")
+        result = model(data)
+        print("Done!")
+        
+        #Export model to onnx
+        # print("Converting...")
+        # torch.onnx.export(model,
+                        # data,
+                        # onnx_file_path,
+                        # input_names=['input'],
+                        # output_names=['output'],
+                        # export_params=True,
+                        # opset_version=13,
+                        # do_constant_folding=True)
